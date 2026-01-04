@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 const CryptoJS = require('crypto-js');
 
 const app = express();
@@ -13,27 +13,21 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
-// Конфигурация базы данных для Render
-// Создадим отдельный сервис для MySQL на Render
-const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'password_manager',
-    port: process.env.DB_PORT || 3306,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-};
+// Конфигурация PostgreSQL для Render
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/password_manager',
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-// Создаем пул соединений
-let pool;
-try {
-    pool = mysql.createPool(dbConfig);
-    console.log('✅ Database connection configured');
-} catch (error) {
-    console.error('❌ Database configuration error:', error);
-}
+// Проверка соединения с БД
+pool.connect((err, client, release) => {
+    if (err) {
+        console.error('❌ Database connection error:', err.message);
+    } else {
+        console.log('✅ Connected to PostgreSQL database');
+        release();
+    }
+});
 
 // Проверка подписи Telegram
 function verifyTelegramHash(initData, botToken) {
@@ -82,31 +76,24 @@ app.post('/api/auth', async (req, res) => {
         //     return res.status(401).json({ success: false, message: 'Invalid signature' });
         // }
 
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
-
-        const connection = await pool.getConnection();
+        const client = await pool.connect();
         try {
-            const [result] = await connection.execute(
-                `INSERT INTO users (telegram_id, username, first_name, last_name)
-                 VALUES (?, ?, ?, ?)
-                     ON DUPLICATE KEY UPDATE
-                                          username = VALUES(username),
-                                          first_name = VALUES(first_name),
-                                          last_name = VALUES(last_name),
-                                          last_login = CURRENT_TIMESTAMP`,
+            // Создаем или обновляем пользователя
+            const result = await client.query(
+                `INSERT INTO users (telegram_id, username, first_name, last_name, last_login)
+                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                 ON CONFLICT (telegram_id) DO UPDATE SET
+                 username = EXCLUDED.username,
+                 first_name = EXCLUDED.first_name,
+                 last_name = EXCLUDED.last_name,
+                 last_login = CURRENT_TIMESTAMP
+                 RETURNING id, telegram_id, username, first_name, last_name, created_at`,
                 [user.id, user.username || null, user.first_name || '', user.last_name || '']
-            );
-
-            const [rows] = await connection.execute(
-                'SELECT id, telegram_id, username, first_name, last_name, created_at FROM users WHERE telegram_id = ?',
-                [user.id]
             );
 
             const sessionToken = Buffer.from(JSON.stringify({
                 telegram_id: user.id,
-                user_id: rows[0].id,
+                user_id: result.rows[0].id,
                 iat: Date.now(),
                 exp: Date.now() + (7 * 24 * 60 * 60 * 1000)
             })).toString('base64');
@@ -115,13 +102,13 @@ app.post('/api/auth', async (req, res) => {
                 success: true,
                 user: {
                     telegram: user,
-                    database: rows[0]
+                    database: result.rows[0]
                 },
                 session_token: sessionToken
             });
 
         } finally {
-            connection.release();
+            client.release();
         }
 
     } catch (error) {
@@ -142,29 +129,25 @@ app.get('/api/passwords', async (req, res) => {
             return res.status(401).json({ success: false, message: 'No token' });
         }
 
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
-
         const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
-        const connection = await pool.getConnection();
-
+        const client = await pool.connect();
+        
         try {
-            const [rows] = await connection.execute(
-                `SELECT id, service_name, login, encrypted_password, iv, created_at
+            const result = await client.query(
+                `SELECT id, service_name, login, encrypted_password, iv, created_at, updated_at
                  FROM passwords
-                 WHERE user_id = ? AND deleted_at IS NULL
+                 WHERE user_id = $1 AND deleted_at IS NULL
                  ORDER BY created_at DESC`,
                 [tokenData.user_id]
             );
 
             res.json({
                 success: true,
-                passwords: rows,
-                count: rows.length
+                passwords: result.rows,
+                count: result.rowCount
             });
         } finally {
-            connection.release();
+            client.release();
         }
     } catch (error) {
         console.error('Get passwords error:', error);
@@ -180,10 +163,6 @@ app.post('/api/passwords', async (req, res) => {
             return res.status(401).json({ success: false, message: 'No token' });
         }
 
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
-
         const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
         const { service_name, login, encrypted_password, iv } = req.body;
 
@@ -191,21 +170,22 @@ app.post('/api/passwords', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing fields' });
         }
 
-        const connection = await pool.getConnection();
+        const client = await pool.connect();
         try {
-            const [result] = await connection.execute(
+            const result = await client.query(
                 `INSERT INTO passwords (user_id, service_name, login, encrypted_password, iv)
-                 VALUES (?, ?, ?, ?, ?)`,
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING id, created_at`,
                 [tokenData.user_id, service_name, login, encrypted_password, iv]
             );
 
             res.json({
                 success: true,
-                id: result.insertId,
-                created_at: new Date().toISOString()
+                id: result.rows[0].id,
+                created_at: result.rows[0].created_at
             });
         } finally {
-            connection.release();
+            client.release();
         }
     } catch (error) {
         console.error('Add password error:', error);
@@ -221,10 +201,6 @@ app.put('/api/passwords/:id', async (req, res) => {
             return res.status(401).json({ success: false, message: 'No token' });
         }
 
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
-
         const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
         const id = req.params.id;
         const { login, encrypted_password, iv } = req.body;
@@ -233,30 +209,30 @@ app.put('/api/passwords/:id', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing fields' });
         }
 
-        const connection = await pool.getConnection();
+        const client = await pool.connect();
         try {
-            const [result] = await connection.execute(
+            const result = await client.query(
                 `UPDATE passwords 
-                 SET login = ?, encrypted_password = ?, iv = ?, updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+                 SET login = $1, encrypted_password = $2, iv = $3, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $4 AND user_id = $5 AND deleted_at IS NULL
+                 RETURNING id`,
                 [login, encrypted_password, iv, id, tokenData.user_id]
             );
 
-            if (result.affectedRows === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Password not found or access denied'
+            if (result.rowCount === 0) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Password not found or access denied' 
                 });
             }
 
             res.json({
                 success: true,
                 updated: true,
-                message: 'Password updated successfully',
-                updated_at: new Date().toISOString()
+                message: 'Password updated successfully'
             });
         } finally {
-            connection.release();
+            client.release();
         }
     } catch (error) {
         console.error('Update password error:', error);
@@ -272,27 +248,24 @@ app.delete('/api/passwords/:id', async (req, res) => {
             return res.status(401).json({ success: false, message: 'No token' });
         }
 
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
-
         const tokenData = JSON.parse(Buffer.from(token, 'base64').toString());
         const id = req.params.id;
 
-        const connection = await pool.getConnection();
+        const client = await pool.connect();
         try {
-            const [result] = await connection.execute(
+            const result = await client.query(
                 `UPDATE passwords SET deleted_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND user_id = ?`,
+                 WHERE id = $1 AND user_id = $2
+                 RETURNING id`,
                 [id, tokenData.user_id]
             );
 
             res.json({
-                success: result.affectedRows > 0,
-                deleted: result.affectedRows > 0
+                success: result.rowCount > 0,
+                deleted: result.rowCount > 0
             });
         } finally {
-            connection.release();
+            client.release();
         }
     } catch (error) {
         console.error('Delete password error:', error);
@@ -300,59 +273,90 @@ app.delete('/api/passwords/:id', async (req, res) => {
     }
 });
 
-// API: Инициализация БД (только для разработки)
+// API: Инициализация БД (создание таблиц)
 app.get('/api/init-db', async (req, res) => {
+    const client = await pool.connect();
     try {
-        if (!pool) {
-            return res.status(500).json({ success: false, message: 'Database not configured' });
-        }
+        // Создаем таблицу users
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                username VARCHAR(255),
+                first_name VARCHAR(255),
+                last_name VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        `);
 
-        const connection = await pool.getConnection();
-        try {
-            await connection.execute(`
-                CREATE TABLE IF NOT EXISTS users (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    telegram_id BIGINT UNIQUE NOT NULL,
-                    username VARCHAR(255),
-                    first_name VARCHAR(255),
-                    last_name VARCHAR(255),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_login TIMESTAMP NULL
-                )
-            `);
+        // Создаем таблицу passwords
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS passwords (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                service_name VARCHAR(255) NOT NULL,
+                login VARCHAR(255) NOT NULL,
+                encrypted_password TEXT NOT NULL,
+                iv VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                deleted_at TIMESTAMP
+            )
+        `);
 
-            await connection.execute(`
-                CREATE TABLE IF NOT EXISTS passwords (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    service_name VARCHAR(255) NOT NULL,
-                    login VARCHAR(255) NOT NULL,
-                    encrypted_password TEXT NOT NULL,
-                    iv VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NULL,
-                    deleted_at TIMESTAMP NULL,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                )
-            `);
+        // Создаем индексы
+        await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)
+        `);
+        
+        await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_passwords_user_id ON passwords(user_id, deleted_at)
+        `);
 
-            res.json({ success: true, message: 'Database initialized' });
-        } finally {
-            connection.release();
-        }
+        res.json({ 
+            success: true, 
+            message: 'Database tables created successfully' 
+        });
     } catch (error) {
         console.error('DB init error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
+    } finally {
+        client.release();
     }
 });
 
-// Проверка работоспособности
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        service: 'Telegram Password Manager'
-    });
+// API: Проверка работоспособности
+app.get('/api/health', async (req, res) => {
+    try {
+        // Проверяем соединение с БД
+        const client = await pool.connect();
+        const dbResult = await client.query('SELECT NOW() as time');
+        client.release();
+
+        res.json({
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            database: {
+                connected: true,
+                time: dbResult.rows[0].time
+            },
+            service: 'Telegram Password Manager'
+        });
+    } catch (error) {
+        res.json({
+            status: 'error',
+            timestamp: new Date().toISOString(),
+            database: {
+                connected: false,
+                error: error.message
+            },
+            service: 'Telegram Password Manager'
+        });
+    }
 });
 
 // Отдаем index.html для всех остальных маршрутов
@@ -364,5 +368,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`💾 Database: PostgreSQL`);
     console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🗄️  Init DB: http://localhost:${PORT}/api/init-db`);
 });
