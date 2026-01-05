@@ -1,9 +1,9 @@
 <?php
 class Database {
-    private $host = "localhost";
-    private $db_name = "password_manager";
-    private $username = "root";
-    private $password = "";
+    private $host = "dpg-d5dd0b4hg0os73f6lpkg-a";
+    private $db_name = "telegram-password-db";
+    private $username = "password_user";
+    private $password = "mAzbKN3QzJSkEGziwr7WSB4NbkDRYcCT";
     public $conn;
 
     public function getConnection() {
