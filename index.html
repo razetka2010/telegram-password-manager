@@ -110,7 +110,8 @@
         <div class="modal-footer">
             <div class="modal-actions">
                 <!-- Кнопки для режима просмотра -->
-                <button id="modal-edit-btn" class="btn btn-primary" onclick="editPassword(document.getElementById('password-modal').dataset.id)">
+                <button id="modal-edit-btn" class="btn btn-primary" 
+                        onclick="editPassword(document.getElementById('password-modal').dataset.id)">
                     <i class="fas fa-edit"></i> Редактировать
                 </button>
 
@@ -124,6 +125,10 @@
 
                 <button class="btn btn-danger" onclick="deletePassword()">
                     <i class="fas fa-trash"></i> Удалить
+                </button>
+                
+                <button class="btn btn-secondary" onclick="closeModal()">
+                    <i class="fas fa-times"></i> Закрыть
                 </button>
             </div>
         </div>
