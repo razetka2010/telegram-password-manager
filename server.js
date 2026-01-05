@@ -20,7 +20,7 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD || 'ueor0ZTVM6WeBxBhkZpt1h0xTEdwyo5J',
     host: process.env.DB_HOST || 'dpg-d5dq2p75r7bs73c3sj9g-a.frankfurt-postgres.render.com',
     port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME || 'telegram_password_manager',
+    database: process.env.DB_NAME || 'telegram_password_manager', // ИЗМЕНИТЕ ЗДЕСЬ
     ssl: {
         rejectUnauthorized: false
     },
