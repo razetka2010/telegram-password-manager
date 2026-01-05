@@ -1,8 +1,8 @@
 class Database {
-    private $host = "dpg-d5dd0b4hg0os73f6lpkg-a";
-    private $db_name = "telegram-password-db";
+    private $host = "dpg-d5d6bb4hg0e473f61pkg-a.frankfurt-postgres.render.com";
+    private $db_name = "telegram-password.db";
     private $username = "password_user";
-    private $password = "mAzbKN3QzJSkEGziwr7WSB4NbkDRYcCT";
+    private $password = "maxkW80zJSKEGz1wr7N8B4Mbk0RYcGT";
     public $conn;
 
     public function getConnection() {
