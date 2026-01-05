@@ -9,7 +9,5 @@ services:
         value: production
       - key: PORT
         value: 3000
-    healthCheckPath: /api/debug-tables
+    healthCheckPath: /api/health
     autoDeploy: true
-    domains:
-      - telegram-password-manager.onrender.com
