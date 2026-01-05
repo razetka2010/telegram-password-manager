@@ -13,10 +13,10 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
-// Конфигурация PostgreSQL для Render
+// В server.js измените конфигурацию pool:
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/password_manager',
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    connectionString: process.env.DATABASE_URL || 'postgresql://password_user:mAzbKN3QzJSkEGziwr7WSB4NbkDRYcCT@dpg-d5dd0b4hg0os73f6lpkg-a.frankfurt-postgres.render.com:5432/telegram-password-db',
+    ssl: true
 });
 
 // Проверка соединения с БД
