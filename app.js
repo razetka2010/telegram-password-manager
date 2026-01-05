@@ -8,26 +8,63 @@ let sessionToken = null;
 let isEditMode = false;
 let editPasswordId = null;
 
+// Для отладки
+window.debugState = () => {
+    return {
+        tg: !!tg,
+        currentUser: currentUser,
+        currentUserId: currentUserId,
+        sessionToken: sessionToken ? sessionToken.substring(0, 20) + '...' : null,
+        currentPasswords: currentPasswords.length
+    };
+};
+
 // Инициализация приложения
 async function initApp() {
     try {
         console.log('🚀 Starting app initialization...');
 
         // Инициализируем Telegram WebApp
-        tg = window.Telegram.WebApp;
-        tg.expand();
-        tg.ready();
+        if (window.Telegram && window.Telegram.WebApp) {
+            tg = window.Telegram.WebApp;
+            tg.expand();
+            tg.ready();
 
-        console.log('📱 Telegram WebApp initialized');
-        console.log('Init Data:', tg.initData);
-        console.log('Platform:', tg.platform);
-        console.log('Version:', tg.version);
+            console.log('📱 Telegram WebApp initialized');
+            console.log('Init Data:', tg.initData);
+            console.log('Platform:', tg.platform);
+            console.log('Version:', tg.version);
+        } else {
+            // Режим отладки в браузере
+            console.warn('⚠️ Telegram WebApp not found, running in debug mode');
+            tg = {
+                initData: 'user={"id":123456789,"first_name":"Test","username":"testuser","language_code":"ru"}',
+                platform: 'web',
+                version: '1.0',
+                expand: () => console.log('Debug: expand'),
+                ready: () => console.log('Debug: ready'),
+                MainButton: {
+                    setText: (text) => { console.log('Debug: MainButton.setText', text); return this; },
+                    show: () => { console.log('Debug: MainButton.show'); return this; },
+                    onClick: (cb) => { console.log('Debug: MainButton.onClick'); cb && cb(); }
+                },
+                showAlert: (msg) => { 
+                    console.log('Debug: showAlert', msg); 
+                    alert(msg); 
+                },
+                HapticFeedback: {
+                    impactOccurred: (type) => console.log('Debug: HapticFeedback', type)
+                }
+            };
+        }
 
         // Получаем initData
         const initData = tg.initData;
 
         // Отправляем на сервер для авторизации
         console.log('🔐 Sending auth request...');
+        console.log('Request data:', { initData: initData });
+        
         const response = await fetch('/api/auth', {
             method: 'POST',
             headers: {
@@ -41,9 +78,12 @@ async function initApp() {
         });
 
         console.log('📨 Auth response status:', response.status);
+        console.log('📨 Auth response headers:', Object.fromEntries(response.headers.entries()));
 
         if (!response.ok) {
-            throw new Error(`Auth failed: ${response.status}`);
+            const errorText = await response.text();
+            console.error('Auth error response:', errorText);
+            throw new Error(`Auth failed: ${response.status} - ${errorText}`);
         }
 
         const data = await response.json();
@@ -56,6 +96,7 @@ async function initApp() {
 
             // Сохраняем токен в localStorage
             localStorage.setItem('telegram_session', sessionToken);
+            console.log('✅ Session token saved to localStorage');
 
             // Показываем информацию о пользователе
             document.getElementById('user-name').textContent =
@@ -81,47 +122,79 @@ async function initApp() {
             document.getElementById('app').classList.remove('hidden');
 
             // Добавляем кнопку в Telegram
-            tg.MainButton.setText("Мои пароли").show();
-            tg.MainButton.onClick(() => {
-                tg.showAlert(`У вас ${currentPasswords.length} сохраненных паролей`);
-            });
+            if (tg.MainButton) {
+                tg.MainButton.setText("Мои пароли").show();
+                tg.MainButton.onClick(() => {
+                    tg.showAlert(`У вас ${currentPasswords.length} сохраненных паролей`);
+                });
+            }
 
             console.log('✅ App initialized successfully');
+            console.log('Current state:', window.debugState());
 
         } else {
+            console.error('Auth failed:', data);
             throw new Error(data.message || 'Auth failed');
         }
 
     } catch (error) {
         console.error('❌ Initialization error:', error);
-
-        // Показываем ошибку пользователю
+        
+        // Показываем подробную ошибку пользователю
         document.getElementById('loader').innerHTML = `
             <div style="text-align: center; padding: 20px;">
                 <h3 style="color: #dc3545;">Ошибка загрузки</h3>
-                <p>${error.message || 'Неизвестная ошибка'}</p>
-                <div style="margin-top: 20px; color: #666; font-size: 14px;">
-                    <p>Проверьте:</p>
-                    <p>1. Запущен ли сервер?</p>
-                    <p>2. Правильно ли настроена база данных?</p>
+                <p style="margin: 10px 0;">${error.message || 'Неизвестная ошибка'}</p>
+                <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; text-align: left;">
+                    <p style="font-weight: bold; margin-bottom: 5px;">Отладочная информация:</p>
+                    <p style="font-size: 12px; color: #666; margin: 2px 0;">URL: ${window.location.href}</p>
+                    <p style="font-size: 12px; color: #666; margin: 2px 0;">Время: ${new Date().toLocaleString()}</p>
+                    <p style="font-size: 12px; color: #666; margin: 2px 0;">Ошибка: ${error.toString()}</p>
                 </div>
-                <button onclick="location.reload()" style="
-                    background: #2481cc;
-                    color: white;
-                    border: none;
-                    padding: 10px 20px;
-                    border-radius: 5px;
-                    margin-top: 20px;
-                    cursor: pointer;
-                ">Перезагрузить</button>
+                <div style="margin-top: 20px;">
+                    <button onclick="location.reload()" style="
+                        background: #2481cc;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        margin: 5px;
+                        cursor: pointer;
+                        font-size: 16px;
+                    ">Перезагрузить</button>
+                    <button onclick="testConnection()" style="
+                        background: #28a745;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        margin: 5px;
+                        cursor: pointer;
+                        font-size: 16px;
+                    ">Тест подключения</button>
+                </div>
             </div>
         `;
     }
 }
 
+// Тест подключения
+window.testConnection = async function() {
+    try {
+        const response = await fetch('/api/health');
+        const data = await response.json();
+        
+        tg.showAlert(`Сервер: ${data.status}\nБаза: ${data.database?.connected ? 'OK' : 'Ошибка'}`);
+    } catch (error) {
+        tg.showAlert(`Ошибка подключения: ${error.message}`);
+    }
+};
+
 // Генерация ключа шифрования
 async function generateEncryptionKey() {
     try {
+        console.log('🔑 Generating encryption key...');
+        
         if (!currentUser || !currentUser.id) {
             throw new Error('No user ID for key generation');
         }
@@ -129,7 +202,7 @@ async function generateEncryptionKey() {
         // Используем Telegram ID как основу для ключа
         const keyMaterial = await window.crypto.subtle.importKey(
             "raw",
-            new TextEncoder().encode(currentUser.id.toString()),
+            new TextEncoder().encode(currentUser.id.toString() + 'telegram-password-manager-secret'),
             { name: "PBKDF2" },
             false,
             ["deriveKey"]
@@ -138,7 +211,7 @@ async function generateEncryptionKey() {
         encryptionKey = await window.crypto.subtle.deriveKey(
             {
                 name: "PBKDF2",
-                salt: new TextEncoder().encode("telegram-password-manager"),
+                salt: new TextEncoder().encode("telegram-password-manager-salt"),
                 iterations: 100000,
                 hash: "SHA-256"
             },
@@ -148,9 +221,9 @@ async function generateEncryptionKey() {
             ["encrypt", "decrypt"]
         );
 
-        console.log('🔑 Encryption key generated');
+        console.log('✅ Encryption key generated');
     } catch (error) {
-        console.error('Key generation error:', error);
+        console.error('❌ Key generation error:', error);
         throw error;
     }
 }
@@ -158,6 +231,7 @@ async function generateEncryptionKey() {
 // Шифрование пароля
 async function encryptPassword(password) {
     try {
+        console.log('🔒 Encrypting password...');
         const iv = window.crypto.getRandomValues(new Uint8Array(12));
         const encoded = new TextEncoder().encode(password);
 
@@ -182,12 +256,16 @@ async function encryptPassword(password) {
             ivString += String.fromCharCode(iv[i]);
         }
 
-        return {
+        const result = {
             encrypted: btoa(encryptedString),
             iv: btoa(ivString)
         };
+        
+        console.log('✅ Password encrypted (length):', result.encrypted.length);
+        return result;
     } catch (error) {
-        console.error('Encryption error:', error);
+        console.error('❌ Encryption error:', error);
+        tg.showAlert('Ошибка шифрования пароля');
         throw error;
     }
 }
@@ -218,15 +296,16 @@ async function decryptPassword(encryptedData, iv) {
 
         return new TextDecoder().decode(decrypted);
     } catch (error) {
-        console.error('Decryption error:', error);
-        return '***Ошибка***';
+        console.error('❌ Decryption error:', error);
+        return '***Ошибка дешифрования***';
     }
 }
 
 // Аутентифицированный запрос
 async function makeAuthenticatedRequest(url, options = {}) {
     if (!sessionToken) {
-        console.error('No session token');
+        console.error('❌ No session token');
+        tg.showAlert('Сессия не найдена. Перезагрузите приложение.');
         return null;
     }
 
@@ -234,6 +313,9 @@ async function makeAuthenticatedRequest(url, options = {}) {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + sessionToken
     };
+
+    console.log('📡 Making request to:', url);
+    console.log('📡 Request options:', { method: options.method || 'GET', headers: defaultHeaders });
 
     try {
         const response = await fetch(url, {
@@ -244,15 +326,24 @@ async function makeAuthenticatedRequest(url, options = {}) {
             }
         });
 
+        console.log('📡 Response status:', response.status);
+        console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+
         if (response.status === 401) {
             tg.showAlert('Сессия истекла. Перезагрузите приложение.');
             return null;
         }
 
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ Request failed:', response.status, errorText);
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+
         return response;
     } catch (error) {
-        console.error('Request error:', error);
-        tg.showAlert('Ошибка подключения');
+        console.error('❌ Request error:', error);
+        tg.showAlert('Ошибка подключения к серверу');
         return null;
     }
 }
@@ -269,11 +360,16 @@ async function loadPasswords() {
 
         if (data.success) {
             currentPasswords = data.passwords || [];
+            console.log(`✅ Loaded ${currentPasswords.length} passwords`);
             renderPasswords();
             updateStats();
+        } else {
+            console.error('Failed to load passwords:', data);
+            tg.showAlert(data.message || 'Ошибка загрузки паролей');
         }
     } catch (error) {
-        console.error('Error loading passwords:', error);
+        console.error('❌ Error loading passwords:', error);
+        tg.showAlert('Ошибка при загрузке паролей');
     }
 }
 
@@ -302,6 +398,7 @@ function renderPasswords() {
             <div class="service-info">
                 <div class="service-name">${escapeHtml(item.service_name)}</div>
                 <div class="login">${escapeHtml(item.login)}</div>
+                <div class="date">${new Date(item.created_at).toLocaleDateString()}</div>
             </div>
             <div class="password-actions">
                 <button class="action-btn" title="Посмотреть пароль">
@@ -357,7 +454,7 @@ async function showPassword(id) {
         document.getElementById('password-modal').classList.remove('hidden');
 
     } catch (error) {
-        console.error('Error showing password:', error);
+        console.error('❌ Error showing password:', error);
         tg.showAlert('Ошибка при загрузке пароля');
     }
 }
@@ -393,7 +490,7 @@ async function editPassword(id) {
         document.getElementById('password-modal').classList.remove('hidden');
 
     } catch (error) {
-        console.error('Error editing password:', error);
+        console.error('❌ Error editing password:', error);
         tg.showAlert('Ошибка при загрузке пароля');
     }
 }
@@ -404,7 +501,7 @@ async function savePassword() {
     const newLogin = document.getElementById('modal-login').value.trim();
     const newPassword = document.getElementById('modal-password').value.trim();
 
-    console.log('Saving password:', { id, newLogin, newPassword });
+    console.log('💾 Saving password changes:', { id, newLogin, newPasswordLength: newPassword.length });
 
     if (!newLogin || !newPassword) {
         tg.showAlert('Логин и пароль не могут быть пустыми!');
@@ -413,7 +510,10 @@ async function savePassword() {
 
     try {
         const encrypted = await encryptPassword(newPassword);
-        console.log('Encrypted password:', encrypted);
+        console.log('🔒 Encrypted data:', { 
+            encryptedLength: encrypted.encrypted.length,
+            ivLength: encrypted.iv.length 
+        });
 
         const response = await makeAuthenticatedRequest(`/api/passwords/${id}`, {
             method: 'PUT',
@@ -424,15 +524,15 @@ async function savePassword() {
             })
         });
 
-        console.log('Save response:', response);
+        console.log('📨 Save response:', response);
 
         if (!response) {
-            console.error('No response from server');
+            console.error('❌ No response from server');
             return;
         }
 
         const data = await response.json();
-        console.log('Save response data:', data);
+        console.log('📊 Save response data:', data);
 
         if (data.success) {
             tg.showAlert('Пароль обновлен!');
@@ -444,12 +544,12 @@ async function savePassword() {
                 tg.HapticFeedback.impactOccurred('medium');
             }
         } else {
-            console.error('Server error:', data);
+            console.error('❌ Server error:', data);
             tg.showAlert(data.message || 'Ошибка при обновлении пароля');
         }
 
     } catch (error) {
-        console.error('Error saving password:', error);
+        console.error('❌ Error saving password:', error);
         tg.showAlert('Ошибка при сохранении: ' + error.message);
     }
 }
@@ -466,14 +566,19 @@ async function addPassword() {
     const login = document.getElementById('login').value.trim();
     const password = document.getElementById('password').value.trim();
 
+    console.log('➕ Adding password:', { serviceName, login, passwordLength: password.length });
+
     if (!serviceName || !login || !password) {
         tg.showAlert('Заполните все поля!');
         return;
     }
 
     try {
+        console.log('🔒 Encrypting password...');
         const encrypted = await encryptPassword(password);
+        console.log('✅ Password encrypted');
 
+        console.log('📤 Sending to server...');
         const response = await makeAuthenticatedRequest('/api/passwords', {
             method: 'POST',
             body: JSON.stringify({
@@ -484,9 +589,16 @@ async function addPassword() {
             })
         });
 
-        if (!response) return;
+        console.log('📨 Server response:', response);
+
+        if (!response) {
+            console.error('❌ No response from server');
+            tg.showAlert('Нет ответа от сервера');
+            return;
+        }
 
         const data = await response.json();
+        console.log('📊 Response data:', data);
 
         if (data.success) {
             // Очищаем форму
@@ -499,17 +611,22 @@ async function addPassword() {
             // Обновляем список
             await loadPasswords();
 
-            tg.showAlert('Пароль сохранен!');
+            tg.showAlert('✅ Пароль успешно сохранен!');
 
             // Вибрация
             if (tg.HapticFeedback) {
                 tg.HapticFeedback.impactOccurred('soft');
             }
+            
+            console.log('✅ Password added successfully');
+        } else {
+            console.error('❌ Server returned error:', data);
+            tg.showAlert(data.message || 'Ошибка при сохранении пароля');
         }
 
     } catch (error) {
-        console.error('Error adding password:', error);
-        tg.showAlert('Ошибка при сохранении');
+        console.error('❌ Error adding password:', error);
+        tg.showAlert('❌ Ошибка при сохранении: ' + error.message);
     }
 }
 
@@ -556,18 +673,34 @@ async function deletePassword() {
 
 // Подтверждение удаления
 function confirmDelete(id) {
-    if (confirm('Удалить этот пароль?')) {
-        makeAuthenticatedRequest(`/api/passwords/${id}`, {
+    if (tg.showConfirm && typeof tg.showConfirm === 'function') {
+        tg.showConfirm('Удалить этот пароль?', function(result) {
+            if (result) {
+                deletePasswordById(id);
+            }
+        });
+    } else if (confirm('Удалить этот пароль?')) {
+        deletePasswordById(id);
+    }
+}
+
+async function deletePasswordById(id) {
+    try {
+        const response = await makeAuthenticatedRequest(`/api/passwords/${id}`, {
             method: 'DELETE',
             body: JSON.stringify({ id: id })
-        })
-            .then(response => response && response.json())
-            .then(data => {
-                if (data && data.success) {
-                    loadPasswords();
-                    tg.showAlert('Пароль удален');
-                }
-            });
+        });
+        
+        if (!response) return;
+        
+        const data = await response && response.json();
+        if (data && data.success) {
+            loadPasswords();
+            tg.showAlert('Пароль удален');
+        }
+    } catch (error) {
+        console.error('Error deleting password:', error);
+        tg.showAlert('Ошибка при удалении');
     }
 }
 
@@ -639,6 +772,8 @@ function escapeHtml(text) {
 
 // Инициализация обработчиков
 function initEventHandlers() {
+    console.log('🔧 Initializing event handlers...');
+    
     // Переключение видимости пароля
     document.getElementById('toggle-password').addEventListener('click', function() {
         const input = document.getElementById('password');
@@ -673,6 +808,8 @@ function initEventHandlers() {
             closeModal();
         }
     });
+    
+    console.log('✅ Event handlers initialized');
 }
 
 // Глобальные функции
@@ -705,7 +842,10 @@ window.filterPasswords = function() {
 
 // Запуск приложения
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('📄 DOM loaded');
+    console.log('📄 DOM loaded, initializing app...');
+    console.log('🌐 Current URL:', window.location.href);
+    console.log('🔧 User Agent:', navigator.userAgent);
+    
     initEventHandlers();
     initApp();
 });
