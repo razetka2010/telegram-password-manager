@@ -8,6 +8,39 @@ let sessionToken = null;
 let isEditMode = false;
 let editPasswordId = null;
 
+// Для тестирования в обычном браузере
+if (typeof window !== 'undefined' && !window.Telegram?.WebApp) {
+    console.log('⚠️ Running in browser mode (not Telegram)');
+    
+    // Создаем мок Telegram WebApp
+    window.Telegram = {
+        WebApp: {
+            initData: 'user={"id":123456789,"first_name":"Test","username":"testuser","language_code":"ru"}',
+            platform: 'web',
+            version: '7.0',
+            expand: function() { console.log('Mock: expand') },
+            ready: function() { console.log('Mock: ready') },
+            MainButton: {
+                setText: function(text) { console.log('Mock: MainButton.setText', text); return this },
+                show: function() { console.log('Mock: MainButton.show'); return this },
+                onClick: function(callback) { console.log('Mock: MainButton.onClick'); callback && callback() }
+            },
+            showAlert: function(message) { 
+                console.log('Mock: showAlert', message);
+                alert(message);
+            },
+            HapticFeedback: {
+                impactOccurred: function(type) { console.log('Mock: HapticFeedback', type) }
+            },
+            showConfirm: function(message, callback) {
+                console.log('Mock: showConfirm', message);
+                const result = confirm(message);
+                callback && callback(result);
+            }
+        }
+    };
+}
+
 // Для отладки
 window.debugState = () => {
     return {
@@ -15,7 +48,8 @@ window.debugState = () => {
         currentUser: currentUser,
         currentUserId: currentUserId,
         sessionToken: sessionToken ? sessionToken.substring(0, 20) + '...' : null,
-        currentPasswords: currentPasswords.length
+        currentPasswords: currentPasswords,
+        passwordsCount: currentPasswords.length
     };
 };
 
@@ -23,48 +57,23 @@ window.debugState = () => {
 async function initApp() {
     try {
         console.log('🚀 Starting app initialization...');
+        console.log('Debug state:', window.debugState());
 
         // Инициализируем Telegram WebApp
-        if (window.Telegram && window.Telegram.WebApp) {
-            tg = window.Telegram.WebApp;
-            tg.expand();
-            tg.ready();
+        tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
 
-            console.log('📱 Telegram WebApp initialized');
-            console.log('Init Data:', tg.initData);
-            console.log('Platform:', tg.platform);
-            console.log('Version:', tg.version);
-        } else {
-            // Режим отладки в браузере
-            console.warn('⚠️ Telegram WebApp not found, running in debug mode');
-            tg = {
-                initData: 'user={"id":123456789,"first_name":"Test","username":"testuser","language_code":"ru"}',
-                platform: 'web',
-                version: '1.0',
-                expand: () => console.log('Debug: expand'),
-                ready: () => console.log('Debug: ready'),
-                MainButton: {
-                    setText: (text) => { console.log('Debug: MainButton.setText', text); return this; },
-                    show: () => { console.log('Debug: MainButton.show'); return this; },
-                    onClick: (cb) => { console.log('Debug: MainButton.onClick'); cb && cb(); }
-                },
-                showAlert: (msg) => { 
-                    console.log('Debug: showAlert', msg); 
-                    alert(msg); 
-                },
-                HapticFeedback: {
-                    impactOccurred: (type) => console.log('Debug: HapticFeedback', type)
-                }
-            };
-        }
+        console.log('📱 Telegram WebApp initialized');
+        console.log('Init Data:', tg.initData);
+        console.log('Platform:', tg.platform);
+        console.log('Version:', tg.version);
 
         // Получаем initData
         const initData = tg.initData;
 
         // Отправляем на сервер для авторизации
         console.log('🔐 Sending auth request...');
-        console.log('Request data:', { initData: initData });
-        
         const response = await fetch('/api/auth', {
             method: 'POST',
             headers: {
@@ -78,7 +87,6 @@ async function initApp() {
         });
 
         console.log('📨 Auth response status:', response.status);
-        console.log('📨 Auth response headers:', Object.fromEntries(response.headers.entries()));
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -96,7 +104,7 @@ async function initApp() {
 
             // Сохраняем токен в localStorage
             localStorage.setItem('telegram_session', sessionToken);
-            console.log('✅ Session token saved to localStorage');
+            console.log('✅ Session token saved to localStorage, user ID:', currentUserId);
 
             // Показываем информацию о пользователе
             document.getElementById('user-name').textContent =
@@ -130,7 +138,7 @@ async function initApp() {
             }
 
             console.log('✅ App initialized successfully');
-            console.log('Current state:', window.debugState());
+            console.log('Current passwords:', currentPasswords);
 
         } else {
             console.error('Auth failed:', data);
@@ -184,7 +192,7 @@ window.testConnection = async function() {
         const response = await fetch('/api/health');
         const data = await response.json();
         
-        tg.showAlert(`Сервер: ${data.status}\nБаза: ${data.database?.connected ? 'OK' : 'Ошибка'}`);
+        tg.showAlert(`Сервер: ${data.status}\nБаза: ${data.database?.connected ? 'OK' : 'Ошибка'}\nТаблицы: ${data.tables}`);
     } catch (error) {
         tg.showAlert(`Ошибка подключения: ${error.message}`);
     }
@@ -261,7 +269,7 @@ async function encryptPassword(password) {
             iv: btoa(ivString)
         };
         
-        console.log('✅ Password encrypted (length):', result.encrypted.length);
+        console.log('✅ Password encrypted');
         return result;
     } catch (error) {
         console.error('❌ Encryption error:', error);
@@ -315,7 +323,7 @@ async function makeAuthenticatedRequest(url, options = {}) {
     };
 
     console.log('📡 Making request to:', url);
-    console.log('📡 Request options:', { method: options.method || 'GET', headers: defaultHeaders });
+    console.log('📡 Request method:', options.method || 'GET');
 
     try {
         const response = await fetch(url, {
@@ -327,7 +335,6 @@ async function makeAuthenticatedRequest(url, options = {}) {
         });
 
         console.log('📡 Response status:', response.status);
-        console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
 
         if (response.status === 401) {
             tg.showAlert('Сессия истекла. Перезагрузите приложение.');
@@ -343,7 +350,7 @@ async function makeAuthenticatedRequest(url, options = {}) {
         return response;
     } catch (error) {
         console.error('❌ Request error:', error);
-        tg.showAlert('Ошибка подключения к серверу');
+        tg.showAlert('Ошибка подключения к серверу: ' + error.message);
         return null;
     }
 }
@@ -369,7 +376,7 @@ async function loadPasswords() {
         }
     } catch (error) {
         console.error('❌ Error loading passwords:', error);
-        tg.showAlert('Ошибка при загрузке паролей');
+        tg.showAlert('Ошибка при загрузке паролей: ' + error.message);
     }
 }
 
@@ -401,35 +408,69 @@ function renderPasswords() {
                 <div class="date">${new Date(item.created_at).toLocaleDateString()}</div>
             </div>
             <div class="password-actions">
-                <button class="action-btn" title="Посмотреть пароль">
+                <button class="action-btn view-btn" title="Посмотреть пароль" data-id="${item.id}">
                     <i class="fas fa-eye"></i>
                 </button>
-                <button class="action-btn" title="Редактировать">
+                <button class="action-btn edit-btn" title="Редактировать" data-id="${item.id}">
                     <i class="fas fa-edit"></i>
                 </button>
-                <button class="action-btn" title="Удалить">
+                <button class="action-btn delete-btn" title="Удалить" data-id="${item.id}">
                     <i class="fas fa-trash"></i>
                 </button>
             </div>
         `;
 
-        // Назначаем обработчики
-        const viewBtn = div.querySelector('.action-btn:nth-child(1)');
-        const editBtn = div.querySelector('.action-btn:nth-child(2)');
-        const deleteBtn = div.querySelector('.action-btn:nth-child(3)');
-
-        viewBtn.onclick = () => showPassword(item.id);
-        editBtn.onclick = () => editPassword(item.id);
-        deleteBtn.onclick = () => confirmDelete(item.id);
-
+        // Назначаем обработчики через делегирование событий
         list.appendChild(div);
+    }
+
+    // Обновляем делегирование событий
+    updateEventDelegation();
+}
+
+// Обновление делегирования событий
+function updateEventDelegation() {
+    const list = document.getElementById('passwords-list');
+    
+    // Удаляем старые обработчики
+    list.removeEventListener('click', handlePasswordActions);
+    
+    // Добавляем новый обработчик
+    list.addEventListener('click', handlePasswordActions);
+}
+
+// Обработчик действий с паролями
+function handlePasswordActions(event) {
+    const target = event.target;
+    const button = target.closest('.action-btn');
+    
+    if (!button) return;
+    
+    const passwordId = button.dataset.id;
+    const password = currentPasswords.find(p => p.id == passwordId);
+    
+    if (!password) {
+        console.error('Password not found:', passwordId);
+        tg.showAlert('Пароль не найден');
+        return;
+    }
+    
+    if (button.classList.contains('view-btn')) {
+        showPassword(passwordId);
+    } else if (button.classList.contains('edit-btn')) {
+        editPassword(passwordId);
+    } else if (button.classList.contains('delete-btn')) {
+        confirmDelete(passwordId);
     }
 }
 
 // Показать пароль
 async function showPassword(id) {
     const password = currentPasswords.find(p => p.id == id);
-    if (!password) return;
+    if (!password) {
+        tg.showAlert('Пароль не найден');
+        return;
+    }
 
     try {
         const decryptedPassword = await decryptPassword(
@@ -462,7 +503,10 @@ async function showPassword(id) {
 // Редактировать пароль
 async function editPassword(id) {
     const password = currentPasswords.find(p => p.id == id);
-    if (!password) return;
+    if (!password) {
+        tg.showAlert('Пароль не найден');
+        return;
+    }
 
     try {
         const decryptedPassword = await decryptPassword(
@@ -510,10 +554,7 @@ async function savePassword() {
 
     try {
         const encrypted = await encryptPassword(newPassword);
-        console.log('🔒 Encrypted data:', { 
-            encryptedLength: encrypted.encrypted.length,
-            ivLength: encrypted.iv.length 
-        });
+        console.log('🔒 Encrypted data ready for update');
 
         const response = await makeAuthenticatedRequest(`/api/passwords/${id}`, {
             method: 'PUT',
@@ -535,7 +576,7 @@ async function savePassword() {
         console.log('📊 Save response data:', data);
 
         if (data.success) {
-            tg.showAlert('Пароль обновлен!');
+            tg.showAlert('✅ Пароль обновлен!');
             closeModal();
             await loadPasswords();
 
@@ -645,70 +686,67 @@ function generatePassword() {
     document.querySelector('#toggle-password i').className = 'fas fa-eye-slash';
 }
 
-// Удалить пароль
-async function deletePassword() {
-    const id = document.getElementById('password-modal').dataset.id;
-
-    try {
-        const response = await makeAuthenticatedRequest(`/api/passwords/${id}`, {
-            method: 'DELETE',
-            body: JSON.stringify({ id: id })
-        });
-
-        if (!response) return;
-
-        const data = await response.json();
-
-        if (data.success) {
-            closeModal();
-            await loadPasswords();
-            tg.showAlert('Пароль удален');
-        }
-
-    } catch (error) {
-        console.error('Error deleting password:', error);
-        tg.showAlert('Ошибка при удалении');
-    }
-}
-
 // Подтверждение удаления
-function confirmDelete(id) {
+async function confirmDelete(id) {
+    const password = currentPasswords.find(p => p.id == id);
+    if (!password) {
+        tg.showAlert('Пароль не найден');
+        return;
+    }
+
+    const confirmMessage = `Удалить пароль для ${password.service_name} (${password.login})?`;
+    
     if (tg.showConfirm && typeof tg.showConfirm === 'function') {
-        tg.showConfirm('Удалить этот пароль?', function(result) {
+        tg.showConfirm(confirmMessage, function(result) {
             if (result) {
                 deletePasswordById(id);
             }
         });
-    } else if (confirm('Удалить этот пароль?')) {
-        deletePasswordById(id);
+    } else if (confirm(confirmMessage)) {
+        await deletePasswordById(id);
     }
 }
 
+// Удалить пароль по ID
 async function deletePasswordById(id) {
     try {
+        console.log('🗑️ Deleting password ID:', id);
         const response = await makeAuthenticatedRequest(`/api/passwords/${id}`, {
-            method: 'DELETE',
-            body: JSON.stringify({ id: id })
+            method: 'DELETE'
         });
         
         if (!response) return;
         
-        const data = await response && response.json();
+        const data = await response.json();
+        console.log('Delete response:', data);
+        
         if (data && data.success) {
-            loadPasswords();
-            tg.showAlert('Пароль удален');
+            tg.showAlert('✅ Пароль удален');
+            await loadPasswords(); // Перезагружаем список
+        } else {
+            tg.showAlert(data?.message || 'Не удалось удалить пароль');
         }
     } catch (error) {
         console.error('Error deleting password:', error);
-        tg.showAlert('Ошибка при удалении');
+        tg.showAlert('Ошибка при удалении: ' + error.message);
     }
+}
+
+// Удалить пароль из модального окна
+async function deletePassword() {
+    const id = document.getElementById('password-modal').dataset.id;
+    await deletePasswordById(id);
+    closeModal();
 }
 
 // Закрыть модальное окно
 function closeModal() {
     document.getElementById('password-modal').classList.add('hidden');
     document.getElementById('modal-password').type = 'password';
-    document.querySelector('.modal-field .toggle-password i').className = 'fas fa-eye';
+    const toggleIcon = document.querySelector('.modal-field .toggle-password i');
+    if (toggleIcon) {
+        toggleIcon.className = 'fas fa-eye';
+    }
     document.getElementById('modal-login').readOnly = true;
     document.getElementById('modal-password').readOnly = true;
     isEditMode = false;
@@ -736,7 +774,7 @@ async function copyToClipboard(inputId) {
 
     try {
         await navigator.clipboard.writeText(input.value);
-        tg.showAlert('Скопировано!');
+        tg.showAlert('✅ Скопировано!');
 
         if (tg.HapticFeedback) {
             tg.HapticFeedback.impactOccurred('light');
@@ -744,7 +782,7 @@ async function copyToClipboard(inputId) {
     } catch (err) {
         input.select();
         document.execCommand('copy');
-        tg.showAlert('Скопировано!');
+        tg.showAlert('✅ Скопировано!');
     }
 }
 
