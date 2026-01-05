@@ -13,10 +13,12 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
-// В server.js измените конфигурацию pool:
+// Конфигурация PostgreSQL с правильными данными
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://password_user:mAzbKN3QzJSkEGziwr7WSB4NbkDRYcCT@dpg-d5dd0b4hg0os73f6lpkg-a.frankfurt-postgres.render.com:5432/telegram-password-db',
-    ssl: true
+    connectionString: process.env.DATABASE_URL || 'postgresql://password_user:maxkW80zJSKEGz1wr7N8B4Mbk0RYcGT@dpg-d5d6bb4hg0e473f61pkg-a.frankfurt-postgres.render.com:5432/telegram-password.db',
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 // Проверка соединения с БД
@@ -71,13 +73,31 @@ app.post('/api/auth', async (req, res) => {
         const user = JSON.parse(userParam);
 
         // Для продакшена включите проверку подписи
-        // const botToken = process.env.BOT_TOKEN || 'ВАШ_ТОКЕН_БОТА';
+        // const botToken = process.env.BOT_TOKEN || '8538939071:AAHbnDlQVpaAIZ0Sv-76zzxhV-ZYWI7PP-4';
         // if (!verifyTelegramHash(initData, botToken)) {
         //     return res.status(401).json({ success: false, message: 'Invalid signature' });
         // }
 
         const client = await pool.connect();
         try {
+            // Проверяем, существует ли таблица users
+            try {
+                await client.query('SELECT 1 FROM users LIMIT 1');
+            } catch (tableError) {
+                // Если таблицы нет, создаем ее
+                await client.query(`
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id BIGINT UNIQUE NOT NULL,
+                        username VARCHAR(255),
+                        first_name VARCHAR(255),
+                        last_name VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP
+                    )
+                `);
+            }
+
             // Создаем или обновляем пользователя
             const result = await client.query(
                 `INSERT INTO users (telegram_id, username, first_name, last_name, last_login)
@@ -133,6 +153,26 @@ app.get('/api/passwords', async (req, res) => {
         const client = await pool.connect();
         
         try {
+            // Проверяем, существует ли таблица passwords
+            try {
+                await client.query('SELECT 1 FROM passwords LIMIT 1');
+            } catch (tableError) {
+                // Если таблицы нет, создаем ее
+                await client.query(`
+                    CREATE TABLE IF NOT EXISTS passwords (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        service_name VARCHAR(255) NOT NULL,
+                        login VARCHAR(255) NOT NULL,
+                        encrypted_password TEXT NOT NULL,
+                        iv VARCHAR(255) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        deleted_at TIMESTAMP
+                    )
+                `);
+            }
+
             const result = await client.query(
                 `SELECT id, service_name, login, encrypted_password, iv, created_at, updated_at
                  FROM passwords
@@ -359,6 +399,50 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+// Отладочный API: Посмотреть таблицы
+app.get('/api/debug-tables', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        // Получаем список всех таблиц
+        const tablesResult = await client.query(`
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public'
+            ORDER BY table_name
+        `);
+
+        // Для каждой таблицы получаем количество записей
+        const tablesInfo = [];
+        for (const table of tablesResult.rows) {
+            try {
+                const countResult = await client.query(`SELECT COUNT(*) as count FROM "${table.table_name}"`);
+                tablesInfo.push({
+                    name: table.table_name,
+                    count: parseInt(countResult.rows[0].count)
+                });
+            } catch (error) {
+                tablesInfo.push({
+                    name: table.table_name,
+                    error: error.message
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            tables: tablesInfo,
+            total_tables: tablesInfo.length
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 // Отдаем index.html для всех остальных маршрутов
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -370,5 +454,6 @@ app.listen(PORT, () => {
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`💾 Database: PostgreSQL`);
     console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🗄️  Init DB: http://localhost:${PORT}/api/init-db`);
+    console.log(`🗄️  Init DB: http://localhost:3000/api/init-db`);
+    console.log(`🔍 Debug tables: http://localhost:3000/api/debug-tables`);
 });
